@@ -23,11 +23,61 @@ from urllib.request import urlopen
 
 DEFAULT_SURVEY_URL = "https://www.mcdfoodforthoughts.com/"
 
+CHECKBOX_RULES = [
+    {
+        "question": "select the items you ordered",
+        "option": "big mac",
+    },
+    {
+        "question": "why your order was not accurate",
+        "option": "received incorrect portion size",
+    },
+]
+
 FILL_ANSWERS_SCRIPT = r"""
 (() => {
   const bodyText = document.body ? document.body.innerText : '';
   if (/thank you for (?:taking|completing)|survey (?:is )?complete|(?:validation|voucher) code(?: is|:)/i.test(bodyText)) {
     return {ok: true, done: true, action: 'completion page detected'};
+  }
+
+  const checkboxRules = __CHECKBOX_RULES__;
+  const checkboxes = [...document.querySelectorAll('input[type="checkbox"]:not([disabled])')];
+  let checked = 0;
+  if (checkboxes.length > 0) {
+    const optionText = checkbox => {
+      const labels = checkbox.labels ? [...checkbox.labels] : [];
+      const text = labels.map(label => label.textContent || '').join(' ').trim();
+      return text || (checkbox.parentElement ? checkbox.parentElement.textContent.trim() : '');
+    };
+    const normalizedBody = bodyText.toLowerCase();
+    const rule = checkboxRules.find(item => normalizedBody.includes(item.question));
+    if (!rule) {
+      return {
+        ok: false,
+        done: false,
+        reason: 'Checkbox question needs a rule',
+        options: checkboxes.map(optionText).filter(Boolean),
+      };
+    }
+    const choice = checkboxes.find(checkbox =>
+      optionText(checkbox).toLowerCase().includes(rule.option)
+    );
+    if (!choice) {
+      return {
+        ok: false,
+        done: false,
+        reason: `Checkbox option not found: ${rule.option}`,
+        options: checkboxes.map(optionText).filter(Boolean),
+      };
+    }
+    if (!choice.checked) {
+      choice.click();
+      choice.dispatchEvent(new Event('input', {bubbles: true}));
+      choice.dispatchEvent(new Event('change', {bubbles: true}));
+      checked++;
+    }
+    return {ok: true, done: false, action: `selected checkbox: ${optionText(choice)}`, checked};
   }
 
   const radios = [...document.querySelectorAll('input[type="radio"]:not([disabled])')];
@@ -296,6 +346,11 @@ def eval_js_in_frames(tab: dict, expression: str) -> dict:
     return {"ok": False, "reason": "No matching survey form found", "frames": attempts}
 
 
+def fill_answers_script() -> str:
+    """Build the answer filler with the configured checkbox rules."""
+    return FILL_ANSWERS_SCRIPT.replace("__CHECKBOX_RULES__", json.dumps(CHECKBOX_RULES))
+
+
 # ── Chrome launch ─────────────────────────────────────────────────────────────
 
 def chrome_exe() -> str | None:
@@ -384,8 +439,10 @@ def fill_receipt_via_devtools(tab: dict, voucher_code: str, purchase_price: str)
 })()
 """
     result = eval_js_in_frames(tab, fill_script.replace("__VALUES__", json.dumps(values)))
-    print(f"Receipt fill result: {result}")
-    return isinstance(result, dict) and bool(result.get("ok"))
+    filled = isinstance(result, dict) and bool(result.get("ok"))
+    if filled:
+        print(f"Receipt fill result: {result}")
+    return filled
 
 
 # ── Diagnostic dump ───────────────────────────────────────────────────────────
@@ -443,7 +500,7 @@ def run_hotkeys(
                     debugging_port, tab, retries=4, delay=0.3, announce=False
                 )
                 if not fill_receipt_via_devtools(tab, voucher_code, purchase_price):
-                    result = eval_js_in_frames(tab, FILL_ANSWERS_SCRIPT)
+                    result = eval_js_in_frames(tab, fill_answers_script())
                     print(f"Fill result: {result}")
             elif f9_is_down and not f9_was_down:
                 tab = get_survey_tab(
