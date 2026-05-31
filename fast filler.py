@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
 import hashlib
 import json
 import os
@@ -21,16 +22,16 @@ from urllib.request import urlopen
 
 
 DEFAULT_SURVEY_URL = "https://www.mcdfoodforthoughts.com/"
-DEBUGGING_PORT = 9222
 
-AUTO_ANSWER_SCRIPT = r"""
+FILL_ANSWERS_SCRIPT = r"""
 (() => {
   const bodyText = document.body ? document.body.innerText : '';
-  if (/thank you|survey complete|validation code|voucher code/i.test(bodyText)) {
+  if (/thank you for (?:taking|completing)|survey (?:is )?complete|(?:validation|voucher) code(?: is|:)/i.test(bodyText)) {
     return {ok: true, done: true, action: 'completion page detected'};
   }
 
   const radios = [...document.querySelectorAll('input[type="radio"]:not([disabled])')];
+  let answered = 0;
   if (radios.length > 0) {
     const groups = {};
     for (const r of radios) {
@@ -53,16 +54,33 @@ AUTO_ANSWER_SCRIPT = r"""
       best.click();
       best.dispatchEvent(new Event('input', {bubbles: true}));
       best.dispatchEvent(new Event('change', {bubbles: true}));
+      answered++;
     }
   }
 
   const selects = [...document.querySelectorAll('select:not([disabled])')];
+  let selected = 0;
   for (const sel of selects) {
     if (sel.value) continue;
     const opts = [...sel.options].filter(o => o.value);
     if (!opts.length) continue;
     sel.value = opts[opts.length - 1].value;
     sel.dispatchEvent(new Event('change', {bubbles: true}));
+    selected++;
+  }
+
+  if (!radios.length && !selects.length) {
+    return {ok: false, done: false, reason: 'No answer fields found'};
+  }
+  return {ok: true, done: false, action: 'filled answers', answered, selected};
+})()
+"""
+
+ADVANCE_SCRIPT = r"""
+(() => {
+  const bodyText = document.body ? document.body.innerText : '';
+  if (/thank you for (?:taking|completing)|survey (?:is )?complete|(?:validation|voucher) code(?: is|:)/i.test(bodyText)) {
+    return {ok: true, done: true, action: 'completion page detected'};
   }
 
   const clickables = [...document.querySelectorAll(
@@ -73,7 +91,7 @@ AUTO_ANSWER_SCRIPT = r"""
       `${el.textContent || ''} ${el.value || ''} ${el.getAttribute('aria-label') || ''}`
     )
   );
-  if (!next) return {ok: false, done: false, reason: 'No Next button found'};
+  if (!next) return {ok: false, done: false, reason: 'No Start/Next button found'};
   next.click();
   return {ok: true, done: false, action: `clicked: ${(next.textContent || next.value || '').trim()}`};
 })()
@@ -148,32 +166,51 @@ def recv_ws(conn: socket.socket) -> str:
     return payload.decode("utf-8")
 
 
-def get_survey_tab(retries: int = 15, delay: float = 1.5) -> dict:
-    """Wait for the mcdfoodforthoughts tab to appear in DevTools."""
-    print("Waiting for survey tab...", end="", flush=True)
+def get_survey_tab(
+    debugging_port: int,
+    previous_tab: dict | None = None,
+    retries: int = 15,
+    delay: float = 1.5,
+    announce: bool = True,
+) -> dict:
+    """Find the survey tab, preferring its stable DevTools target ID."""
+    if announce:
+        print("Waiting for survey tab...", end="", flush=True)
+    previous_id = previous_tab.get("id") if previous_tab else None
     for attempt in range(retries):
         try:
-            targets = json.load(urlopen(f"http://127.0.0.1:{DEBUGGING_PORT}/json", timeout=3))
-            tab = next(
-                (t for t in targets
-                 if t.get("type") == "page" and "mcdfoodforthoughts" in t.get("url", "")),
-                None,
+            targets = json.load(
+                urlopen(f"http://127.0.0.1:{debugging_port}/json", timeout=3)
             )
+            pages = [target for target in targets if target.get("type") == "page"]
+            tab = next((target for target in pages if target.get("id") == previous_id), None)
+            if not tab:
+                tab = next(
+                    (
+                        target for target in pages
+                        if "mcdfoodforthoughts" in target.get("url", "").lower()
+                        or "food for thoughts" in target.get("title", "").lower()
+                    ),
+                    None,
+                )
             if tab:
-                print(" found!")
+                if announce:
+                    print(" found!")
                 return tab
         except Exception:
             pass
-        print(".", end="", flush=True)
+        if announce:
+            print(".", end="", flush=True)
         time.sleep(delay)
-    print()
+    if announce:
+        print()
     raise RuntimeError(
         "Could not find the survey tab. Make sure Chrome opened and the survey page loaded."
     )
 
 
-def eval_js(tab: dict, expression: str) -> dict:
-    """Run JS in the tab via Chrome DevTools and return the result."""
+def cdp_command(tab: dict, method: str, params: dict | None = None) -> dict:
+    """Send a Chrome DevTools command to a page target."""
     ws = urlparse(tab["webSocketDebuggerUrl"])
     conn = socket.create_connection((ws.hostname, ws.port), timeout=10)
     try:
@@ -189,17 +226,74 @@ def eval_js(tab: dict, expression: str) -> dict:
         expected = base64.b64encode(
             hashlib.sha1(f"{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11".encode()).digest()
         )
-        if b"101 Switching Protocols" not in response or expected not in response:
+        if not response.startswith(b"HTTP/1.1 101 ") or expected not in response:
             raise ConnectionError("WebSocket handshake failed")
         send_ws(conn, json.dumps({
             "id": 1,
-            "method": "Runtime.evaluate",
-            "params": {"expression": expression, "returnByValue": True, "awaitPromise": False},
+            "method": method,
+            "params": params or {},
         }))
-        data = json.loads(recv_ws(conn))
-        return data.get("result", {}).get("result", {}).get("value") or {}
+        while True:
+            payload = recv_ws(conn)
+            if not payload:
+                continue
+            data = json.loads(payload)
+            if data.get("id") != 1:
+                continue
+            if data.get("error"):
+                raise RuntimeError(f"DevTools error: {data['error']}")
+            return data.get("result", {})
     finally:
         conn.close()
+
+
+def eval_js(tab: dict, expression: str, context_id: int | None = None) -> dict:
+    """Run JS in the tab via Chrome DevTools and return the result."""
+    params = {
+        "expression": expression,
+        "returnByValue": True,
+        "awaitPromise": False,
+    }
+    if context_id is not None:
+        params["contextId"] = context_id
+    result = cdp_command(tab, "Runtime.evaluate", params)
+    return result.get("result", {}).get("value") or {}
+
+
+def iter_frame_contexts(tab: dict):
+    """Yield an isolated JavaScript context for every frame in the tab."""
+    frame_tree = cdp_command(tab, "Page.getFrameTree").get("frameTree", {})
+    pending = [frame_tree]
+    while pending:
+        node = pending.pop(0)
+        pending.extend(node.get("childFrames", []))
+        frame = node.get("frame", {})
+        frame_id = frame.get("id")
+        if not frame_id:
+            continue
+        try:
+            context = cdp_command(tab, "Page.createIsolatedWorld", {
+                "frameId": frame_id,
+                "worldName": "mcd-survey-helper",
+            })
+            yield frame, context["executionContextId"]
+        except Exception:
+            continue
+
+
+def eval_js_in_frames(tab: dict, expression: str) -> dict:
+    """Evaluate JS in each frame until one reports that it handled the action."""
+    attempts = []
+    for frame, context_id in iter_frame_contexts(tab):
+        try:
+            result = eval_js(tab, expression, context_id)
+        except Exception as e:
+            attempts.append({"url": frame.get("url", ""), "error": str(e)})
+            continue
+        if isinstance(result, dict) and result.get("ok"):
+            return result
+        attempts.append({"url": frame.get("url", ""), "result": result})
+    return {"ok": False, "reason": "No matching survey form found", "frames": attempts}
 
 
 # ── Chrome launch ─────────────────────────────────────────────────────────────
@@ -216,7 +310,14 @@ def chrome_exe() -> str | None:
     return None
 
 
-def open_chrome(url: str) -> bool:
+def find_available_port() -> int:
+    """Choose an unused local port for this Chrome session."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as conn:
+        conn.bind(("127.0.0.1", 0))
+        return conn.getsockname()[1]
+
+
+def open_chrome(url: str, debugging_port: int) -> bool:
     exe = chrome_exe()
     if not exe:
         print("ERROR: Chrome not found.", file=sys.stderr)
@@ -224,7 +325,7 @@ def open_chrome(url: str) -> bool:
     profile = tempfile.mkdtemp(prefix="mcd-survey-")
     subprocess.Popen([
         exe, "--incognito",
-        f"--remote-debugging-port={DEBUGGING_PORT}",
+        f"--remote-debugging-port={debugging_port}",
         "--remote-allow-origins=*",
         f"--user-data-dir={profile}",
         url,
@@ -241,6 +342,8 @@ def normalize_code(raw: str) -> str:
         raise ValueError("voucher code cannot be empty")
     if not re.fullmatch(r"[A-Za-z0-9-]+", code):
         raise ValueError("voucher code may only contain letters, numbers, and hyphens")
+    if len(code.replace("-", "")) != 12:
+        raise ValueError("voucher code must contain 12 letters or numbers")
     return code
 
 
@@ -251,51 +354,38 @@ def normalize_price(raw: str) -> str:
     return f"{float(price):.2f}"
 
 
-def fill_receipt_via_js(tab: dict, voucher_code: str, purchase_price: str) -> bool:
-    """Fill the receipt entry form using JavaScript directly in the page."""
+def fill_receipt_via_devtools(tab: dict, voucher_code: str, purchase_price: str) -> bool:
+    """Fill receipt inputs in any page frame without requiring desktop focus."""
     pounds, pence = purchase_price.split(".")
-    groups = voucher_code.split("-") if "-" in voucher_code else [
-        voucher_code[i:i+4] for i in range(0, len(voucher_code), 4)
-    ]
-    fill_script = f"""
-(() => {{
-  // Fill code boxes — they're usually a series of text inputs
-  const codeGroups = {json.dumps(groups)};
-  const textInputs = [...document.querySelectorAll('input[type="text"], input:not([type])')];
+    compact_code = voucher_code.replace("-", "")
+    groups = [compact_code[i:i+4] for i in range(0, len(compact_code), 4)]
+    values = [*groups, pounds, pence]
+    fill_script = r"""
+(() => {
+  const values = __VALUES__;
+  const ids = ['CN1', 'CN2', 'CN3', 'AmountSpent1', 'AmountSpent2'];
+  const fields = ids.map(id => document.getElementById(id) || document.querySelector(`[name="${id}"]`));
+  if (fields.some(field => !field)) {
+    return {ok: false, reason: 'Receipt fields not found',
+            fields: fields.filter(Boolean).length};
+  }
 
-  let filled = 0;
-  for (let i = 0; i < codeGroups.length && i < textInputs.length; i++) {{
-    const inp = textInputs[i];
-    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    nativeSetter.call(inp, codeGroups[i]);
-    inp.dispatchEvent(new Event('input', {{bubbles: true}}));
-    inp.dispatchEvent(new Event('change', {{bubbles: true}}));
-    filled++;
-  }}
-
-  // Fill price fields if present
-  const priceInputs = textInputs.slice(codeGroups.length);
-  if (priceInputs.length >= 2) {{
-    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    nativeSetter.call(priceInputs[0], {json.dumps(pounds)});
-    priceInputs[0].dispatchEvent(new Event('input', {{bubbles: true}}));
-    nativeSetter.call(priceInputs[1], {json.dumps(pence)});
-    priceInputs[1].dispatchEvent(new Event('input', {{bubbles: true}}));
-  }}
-
-  // Click Start/Next
-  const btn = [...document.querySelectorAll('button, input[type="submit"], input[type="button"]')]
-    .find(b => /start|next|continue/i.test(b.textContent + b.value));
-  if (btn) {{ btn.click(); return {{ok: true, filled}}; }}
-  return {{ok: false, filled, reason: 'No start button found'}};
-}})()
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    field.focus();
+    setter.call(field, values[i]);
+    field.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
+    field.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+    field.dispatchEvent(new Event('blur', {bubbles: true, composed: true}));
+  }
+  return {ok: fields.every((field, index) => field.value === values[index]),
+          action: 'filled receipt details', fields: fields.length};
+})()
 """
-    result = eval_js(tab, fill_script)
-    if isinstance(result, dict) and result.get("ok"):
-        print(f"Receipt details filled ({result.get('filled')} code boxes). Survey starting...")
-        return True
+    result = eval_js_in_frames(tab, fill_script.replace("__VALUES__", json.dumps(values)))
     print(f"Receipt fill result: {result}")
-    return False
+    return isinstance(result, dict) and bool(result.get("ok"))
 
 
 # ── Diagnostic dump ───────────────────────────────────────────────────────────
@@ -326,37 +416,48 @@ def run_diagnose(tab: dict) -> None:
     print("─────────────────────────────────────────────────────────────────\n")
 
 
-# ── Auto-complete loop ────────────────────────────────────────────────────────
+# ── Hotkeys ──────────────────────────────────────────────────────────────────
 
-def run_auto_complete(tab: dict, max_pages: int = 60, page_delay: float = 2.5) -> None:
-    print("\nAuto-complete running. Do not close this window...")
-    for page_num in range(1, max_pages + 1):
-        time.sleep(page_delay)
+def run_hotkeys(
+    debugging_port: int, tab: dict, voucher_code: str, purchase_price: str
+) -> None:
+    """Watch for F8 and F9 presses without reserving global hotkeys."""
+    user32 = ctypes.windll.user32
+    vk_f8 = 0x77
+    vk_f9 = 0x78
+
+    print("\nHotkeys ready:")
+    print("  Welcome page: press F9 once")
+    print("  Receipt page: press F8 to fill details, then F9 to start")
+    print("  Survey pages: press F8 to fill answers, then F9 to continue")
+    print("Close this window or press Ctrl+C here to stop.")
+
+    f8_was_down = False
+    f9_was_down = False
+    while True:
+        f8_is_down = bool(user32.GetAsyncKeyState(vk_f8) & 0x8000)
+        f9_is_down = bool(user32.GetAsyncKeyState(vk_f9) & 0x8000)
         try:
-            result = eval_js(tab, AUTO_ANSWER_SCRIPT)
+            if f8_is_down and not f8_was_down:
+                tab = get_survey_tab(
+                    debugging_port, tab, retries=4, delay=0.3, announce=False
+                )
+                if not fill_receipt_via_devtools(tab, voucher_code, purchase_price):
+                    result = eval_js_in_frames(tab, FILL_ANSWERS_SCRIPT)
+                    print(f"Fill result: {result}")
+            elif f9_is_down and not f9_was_down:
+                tab = get_survey_tab(
+                    debugging_port, tab, retries=4, delay=0.3, announce=False
+                )
+                result = eval_js_in_frames(tab, ADVANCE_SCRIPT)
+                print(f"Next result: {result}")
+                if isinstance(result, dict) and result.get("done"):
+                    print("Survey complete. Check Chrome for your voucher code.")
         except Exception as e:
-            print(f"  Page {page_num}: error — {e}, retrying...")
-            time.sleep(2)
-            try:
-                result = eval_js(tab, AUTO_ANSWER_SCRIPT)
-            except Exception as e2:
-                print(f"  Page {page_num}: failed again — {e2}. Stopping.")
-                return
-
-        if not isinstance(result, dict):
-            print(f"  Page {page_num}: unexpected response, skipping.")
-            continue
-
-        if result.get("done"):
-            print(f"\n  Survey complete! Check Chrome for your voucher code.")
-            return
-
-        if result.get("ok"):
-            print(f"  Page {page_num}: {result.get('action', 'answered and advanced')}")
-        else:
-            print(f"  Page {page_num}: {result.get('reason', 'unknown issue')} — trying anyway")
-
-    print("Reached page limit without completing.")
+            print(f"Hotkey action failed: {e}")
+        f8_was_down = f8_is_down
+        f9_was_down = f9_is_down
+        time.sleep(0.05)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -385,7 +486,8 @@ def main() -> int:
         print(f"Invalid input: {e}", file=sys.stderr)
         return 2
 
-    if not open_chrome(args.url):
+    debugging_port = find_available_port()
+    if not open_chrome(args.url, debugging_port):
         input("Press Enter to exit.")
         return 1
 
@@ -393,7 +495,7 @@ def main() -> int:
     time.sleep(4)
 
     try:
-        tab = get_survey_tab()
+        tab = get_survey_tab(debugging_port)
     except RuntimeError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         input("Press Enter to exit.")
@@ -405,16 +507,12 @@ def main() -> int:
         input("Press Enter to exit.")
         return 0
 
-    # Fill receipt details via JS (no keyboard needed)
-    print("\nFilling in receipt details...")
-    time.sleep(1)
-    fill_receipt_via_js(tab, voucher_code, purchase_price)
-
-    # Wait for survey to transition past receipt page
-    print("Waiting for survey questions to load...")
-    time.sleep(4)
-
-    run_auto_complete(tab)
+    try:
+        run_hotkeys(debugging_port, tab, voucher_code, purchase_price)
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        input("Press Enter to exit.")
+        return 1
 
     input("\nPress Enter to exit.")
     return 0
