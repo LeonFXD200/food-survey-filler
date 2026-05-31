@@ -1,0 +1,428 @@
+
+<h2 class="sr-only">McDonald's Food for Thoughts Survey Helper — enter your voucher code and answer the survey questions to get a clipboard-ready summary.</h2>
+
+<style>
+  :root {
+    --mcred: #DA291C;
+    --mcyellow: #FFC72C;
+    --mcred-dark: #9B1D14;
+  }
+  .mc-header {
+    background: var(--mcred);
+    border-radius: var(--border-radius-lg) var(--border-radius-lg) 0 0;
+    padding: 1.25rem 1.5rem 1rem;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .mc-arch {
+    font-size: 32px; font-weight: 900; color: var(--mcyellow);
+    font-family: var(--font-sans); line-height: 1; letter-spacing: -2px;
+  }
+  .mc-title { color: #fff; font-size: 16px; font-weight: 500; margin: 0; }
+  .mc-sub { color: rgba(255,255,255,0.75); font-size: 12px; margin: 2px 0 0; }
+  .mc-body {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-top: none;
+    border-radius: 0 0 var(--border-radius-lg) var(--border-radius-lg);
+    padding: 1.25rem 1.5rem 1.5rem;
+  }
+  .step { display: none; }
+  .step.active { display: block; }
+  .step-label {
+    font-size: 11px; font-weight: 500; letter-spacing: .06em;
+    color: var(--color-text-tertiary); text-transform: uppercase; margin: 0 0 1rem;
+  }
+  .q-block { margin-bottom: 1.25rem; }
+  .q-text { font-size: 14px; font-weight: 500; color: var(--color-text-primary); margin: 0 0 8px; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .opt-btn {
+    border: 0.5px solid var(--color-border-secondary);
+    background: var(--color-background-secondary);
+    border-radius: var(--border-radius-md);
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
+    color: var(--color-text-primary); transition: all .15s;
+  }
+  .opt-btn:hover { border-color: var(--mcred); color: var(--mcred); }
+  .opt-btn.selected { background: var(--mcred); border-color: var(--mcred); color: #fff; }
+  .rating-row { display: flex; gap: 8px; }
+  .rating-btn {
+    width: 36px; height: 36px; border-radius: 50%;
+    border: 0.5px solid var(--color-border-secondary);
+    background: var(--color-background-secondary);
+    font-size: 13px; font-weight: 500; cursor: pointer;
+    color: var(--color-text-primary); transition: all .15s;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .rating-btn:hover { border-color: var(--mcred); }
+  .rating-btn.selected { background: var(--mcred); border-color: var(--mcred); color: #fff; }
+  .check-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+  .check-btn {
+    border: 0.5px solid var(--color-border-secondary);
+    background: var(--color-background-secondary);
+    border-radius: var(--border-radius-md);
+    padding: 6px 12px; font-size: 13px; cursor: pointer;
+    color: var(--color-text-primary); transition: all .15s;
+  }
+  .check-btn:hover { border-color: var(--mcred); }
+  .check-btn.selected { background: var(--mcred); border-color: var(--mcred); color: #fff; }
+  textarea.mc-text {
+    width: 100%; box-sizing: border-box;
+    min-height: 72px; resize: vertical;
+    font-size: 13px; padding: 8px 10px;
+    border: 0.5px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    background: var(--color-background-secondary);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+  }
+  .voucher-input {
+    font-size: 20px; letter-spacing: .18em; font-weight: 500;
+    text-align: center; padding: 10px 16px; width: 100%;
+    box-sizing: border-box; text-transform: uppercase;
+    border: 2px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    background: var(--color-background-secondary);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+  }
+  .voucher-input:focus { border-color: var(--mcred); outline: none; }
+  .nav-row { display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; gap: 8px; }
+  .btn-primary {
+    background: var(--mcred); color: #fff; border: none;
+    padding: 9px 22px; border-radius: var(--border-radius-md);
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: background .15s;
+  }
+  .btn-primary:hover { background: var(--mcred-dark); }
+  .btn-secondary {
+    background: transparent; color: var(--color-text-secondary);
+    border: 0.5px solid var(--color-border-secondary);
+    padding: 8px 18px; border-radius: var(--border-radius-md);
+    font-size: 14px; cursor: pointer;
+  }
+  .progress-bar { height: 3px; background: var(--color-border-tertiary); border-radius: 2px; margin-bottom: 1.25rem; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--mcred); border-radius: 2px; transition: width .3s; }
+  .summary-block {
+    background: var(--color-background-secondary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    padding: 12px 14px; margin-bottom: 10px;
+    font-size: 13px;
+  }
+  .summary-label { color: var(--color-text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 2px; }
+  .summary-value { color: var(--color-text-primary); font-weight: 500; }
+  .voucher-badge {
+    background: var(--mcyellow); color: #5a3e00;
+    font-family: var(--font-mono); font-size: 22px; letter-spacing: .2em;
+    font-weight: 700; text-align: center; padding: 12px;
+    border-radius: var(--border-radius-md); margin-bottom: 1rem;
+  }
+  .copy-btn {
+    width: 100%; background: var(--mcred); color: #fff;
+    border: none; padding: 11px; border-radius: var(--border-radius-md);
+    font-size: 14px; font-weight: 500; cursor: pointer; display: flex;
+    align-items: center; justify-content: center; gap: 6px; transition: background .15s;
+    margin-bottom: 8px;
+  }
+  .copy-btn:hover { background: var(--mcred-dark); }
+  .open-btn {
+    width: 100%; background: transparent; color: var(--color-text-primary);
+    border: 0.5px solid var(--color-border-secondary);
+    padding: 10px; border-radius: var(--border-radius-md);
+    font-size: 14px; cursor: pointer; display: flex;
+    align-items: center; justify-content: center; gap: 6px;
+  }
+  .open-btn:hover { border-color: var(--mcred); color: var(--mcred); }
+  .copied-msg { color: #1a7a3c; font-size: 13px; text-align: center; margin: 6px 0 0; display: none; }
+  .err { color: var(--mcred); font-size: 12px; margin: 4px 0 0; display: none; }
+</style>
+
+<div style="max-width: 520px; margin: 1rem auto;">
+  <div class="mc-header">
+    <div class="mc-arch">M</div>
+    <div>
+      <p class="mc-title">Food for Thoughts survey helper</p>
+      <p class="mc-sub">Quick guide to completing your feedback</p>
+    </div>
+  </div>
+  <div class="mc-body">
+    <div class="progress-bar"><div class="progress-fill" id="prog" style="width:0%"></div></div>
+
+    <div class="step active" id="step-0">
+      <p class="step-label">Step 1 of 5 — voucher code</p>
+      <div class="q-block">
+        <p class="q-text">Enter your 12-character code from your receipt</p>
+        <input class="voucher-input" id="voucher" maxlength="12" placeholder="XXXXXXXXXXXX" autocomplete="off" />
+        <p class="err" id="voucher-err">Please enter a 12-character code.</p>
+      </div>
+      <div class="nav-row">
+        <span></span>
+        <button class="btn-primary" onclick="goNext(0)">Continue</button>
+      </div>
+    </div>
+
+    <div class="step" id="step-1">
+      <p class="step-label">Step 2 of 5 — your visit</p>
+      <div class="q-block">
+        <p class="q-text">Was your overall experience good?</p>
+        <div class="btn-row">
+          <button class="opt-btn" onclick="pick(this,'overall')">Yes</button>
+          <button class="opt-btn" onclick="pick(this,'overall')">No</button>
+        </div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Where did you place your order?</p>
+        <div class="btn-row">
+          <button class="opt-btn" onclick="pick(this,'order_method')">Counter</button>
+          <button class="opt-btn" onclick="pick(this,'order_method')">Self-service kiosk</button>
+          <button class="opt-btn" onclick="pick(this,'order_method')">Drive-thru</button>
+          <button class="opt-btn" onclick="pick(this,'order_method')">Table service</button>
+          <button class="opt-btn" onclick="pick(this,'order_method')">McDelivery</button>
+        </div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Was your order accurate?</p>
+        <div class="btn-row">
+          <button class="opt-btn" onclick="pick(this,'accurate')">Yes</button>
+          <button class="opt-btn" onclick="pick(this,'accurate')">No</button>
+        </div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Did you customise your order?</p>
+        <div class="btn-row">
+          <button class="opt-btn" onclick="pick(this,'customised')">Yes</button>
+          <button class="opt-btn" onclick="pick(this,'customised')">No</button>
+        </div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Did you experience a problem?</p>
+        <div class="btn-row">
+          <button class="opt-btn" onclick="pick(this,'problem')">Yes</button>
+          <button class="opt-btn" onclick="pick(this,'problem')">No</button>
+        </div>
+      </div>
+      <div class="nav-row">
+        <button class="btn-secondary" onclick="goBack(1)">Back</button>
+        <button class="btn-primary" onclick="goNext(1)">Continue</button>
+      </div>
+    </div>
+
+    <div class="step" id="step-2">
+      <p class="step-label">Step 3 of 5 — your order</p>
+      <div class="q-block">
+        <p class="q-text">Which items did you order? (select all that apply)</p>
+        <div class="check-grid">
+          <button class="check-btn" onclick="toggle(this,'items')">Big Mac</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Quarter Pounder</button>
+          <button class="check-btn" onclick="toggle(this,'items')">McChicken</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Chicken McNuggets</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Filet-O-Fish</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Wrap</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Salad</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Fries</button>
+          <button class="check-btn" onclick="toggle(this,'items')">McCafé drink</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Soft drink</button>
+          <button class="check-btn" onclick="toggle(this,'items')">McFlurry / dessert</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Happy Meal</button>
+          <button class="check-btn" onclick="toggle(this,'items')">Breakfast item</button>
+        </div>
+      </div>
+      <div class="nav-row">
+        <button class="btn-secondary" onclick="goBack(2)">Back</button>
+        <button class="btn-primary" onclick="goNext(2)">Continue</button>
+      </div>
+    </div>
+
+    <div class="step" id="step-3">
+      <p class="step-label">Step 4 of 5 — ratings & extras</p>
+      <div class="q-block">
+        <p class="q-text">How satisfied were you with the food? (1 = poor, 5 = excellent)</p>
+        <div class="rating-row" id="r-food"></div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Service?</p>
+        <div class="rating-row" id="r-service"></div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Cleanliness?</p>
+        <div class="rating-row" id="r-clean"></div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Staff friendliness?</p>
+        <div class="rating-row" id="r-staff"></div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Were you asked to wait in the car park?</p>
+        <div class="btn-row">
+          <button class="opt-btn" onclick="pick(this,'carpark')">Yes</button>
+          <button class="opt-btn" onclick="pick(this,'carpark')">No</button>
+          <button class="opt-btn" onclick="pick(this,'carpark')">N/A</button>
+        </div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Would you recommend this McDonald's?</p>
+        <div class="btn-row">
+          <button class="opt-btn" onclick="pick(this,'recommend')">Definitely yes</button>
+          <button class="opt-btn" onclick="pick(this,'recommend')">Probably yes</button>
+          <button class="opt-btn" onclick="pick(this,'recommend')">Probably not</button>
+          <button class="opt-btn" onclick="pick(this,'recommend')">Definitely not</button>
+        </div>
+      </div>
+      <div class="q-block">
+        <p class="q-text">Anything else you'd like to say?</p>
+        <textarea class="mc-text" id="comments" placeholder="Optional — add any extra comments here…"></textarea>
+      </div>
+      <div class="nav-row">
+        <button class="btn-secondary" onclick="goBack(3)">Back</button>
+        <button class="btn-primary" onclick="goNext(3)">View summary</button>
+      </div>
+    </div>
+
+    <div class="step" id="step-4">
+      <p class="step-label">Step 5 of 5 — ready to go</p>
+      <div class="voucher-badge" id="summary-voucher"></div>
+      <button class="copy-btn" id="copy-btn" onclick="copyCode()">
+        <i class="ti ti-copy" aria-hidden="true"></i> Copy voucher code to clipboard
+      </button>
+      <p class="copied-msg" id="copied-msg"><i class="ti ti-check" aria-hidden="true"></i> Copied!</p>
+      <button class="open-btn" onclick="openSurvey()">
+        <i class="ti ti-external-link" aria-hidden="true"></i> Open McDonald's survey site
+      </button>
+      <div style="margin: 1.25rem 0 0.5rem; font-size: 13px; font-weight: 500; color: var(--color-text-secondary);">Your answers at a glance</div>
+      <div id="summary-content"></div>
+      <div style="margin-top: 1rem;">
+        <button class="btn-secondary" style="font-size:12px;" onclick="restart()">
+          <i class="ti ti-refresh" aria-hidden="true"></i> Start over
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const state = {
+  voucher: '', overall: '', order_method: '', accurate: '', customised: '',
+  problem: '', items: [], r_food: '', r_service: '', r_clean: '', r_staff: '',
+  carpark: '', recommend: '', comments: ''
+};
+const totalSteps = 5;
+const ratingIds = ['r-food','r-service','r-clean','r-staff'];
+const ratingKeys = ['r_food','r_service','r_clean','r_staff'];
+
+function buildRatings() {
+  ratingIds.forEach((id, i) => {
+    const el = document.getElementById(id);
+    el.innerHTML = '';
+    for (let n = 1; n <= 5; n++) {
+      const b = document.createElement('button');
+      b.className = 'rating-btn';
+      b.textContent = n;
+      b.onclick = function() {
+        el.querySelectorAll('.rating-btn').forEach(x => x.classList.remove('selected'));
+        b.classList.add('selected');
+        state[ratingKeys[i]] = String(n);
+      };
+      el.appendChild(b);
+    }
+  });
+}
+buildRatings();
+
+function setProgress(step) {
+  document.getElementById('prog').style.width = Math.round((step / (totalSteps - 1)) * 100) + '%';
+}
+
+function pick(btn, key) {
+  btn.closest('.btn-row').querySelectorAll('.opt-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  state[key] = btn.textContent.trim();
+}
+
+function toggle(btn, key) {
+  btn.classList.toggle('selected');
+  const val = btn.textContent.trim();
+  if (btn.classList.contains('selected')) {
+    state[key].push(val);
+  } else {
+    state[key] = state[key].filter(v => v !== val);
+  }
+}
+
+function showStep(n) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById('step-' + n).classList.add('active');
+  setProgress(n);
+}
+
+function goNext(from) {
+  if (from === 0) {
+    const v = document.getElementById('voucher').value.trim().toUpperCase();
+    const err = document.getElementById('voucher-err');
+    if (v.length !== 12) { err.style.display = 'block'; return; }
+    err.style.display = 'none';
+    state.voucher = v;
+    showStep(1);
+  } else if (from === 1) {
+    showStep(2);
+  } else if (from === 2) {
+    showStep(3);
+  } else if (from === 3) {
+    state.comments = document.getElementById('comments').value.trim();
+    buildSummary();
+    showStep(4);
+  }
+}
+
+function goBack(from) {
+  showStep(from - 1);
+}
+
+function buildSummary() {
+  document.getElementById('summary-voucher').textContent = state.voucher;
+  const rows = [
+    ['Overall experience', state.overall || '—'],
+    ['Order placed at', state.order_method || '—'],
+    ['Order accurate', state.accurate || '—'],
+    ['Customised order', state.customised || '—'],
+    ['Experienced problem', state.problem || '—'],
+    ['Items ordered', state.items.length ? state.items.join(', ') : '—'],
+    ['Food rating', state.r_food ? state.r_food + ' / 5' : '—'],
+    ['Service rating', state.r_service ? state.r_service + ' / 5' : '—'],
+    ['Cleanliness rating', state.r_clean ? state.r_clean + ' / 5' : '—'],
+    ['Staff rating', state.r_staff ? state.r_staff + ' / 5' : '—'],
+    ['Asked to wait (car park)', state.carpark || '—'],
+    ['Would recommend', state.recommend || '—'],
+    ['Additional comments', state.comments || '—'],
+  ];
+  const el = document.getElementById('summary-content');
+  el.innerHTML = rows.map(([label, val]) =>
+    `<div class="summary-block"><div class="summary-label">${label}</div><div class="summary-value">${val}</div></div>`
+  ).join('');
+}
+
+function copyCode() {
+  navigator.clipboard.writeText(state.voucher).then(() => {
+    const msg = document.getElementById('copied-msg');
+    msg.style.display = 'block';
+    setTimeout(() => msg.style.display = 'none', 2500);
+  }).catch(() => {
+    prompt('Copy this code:', state.voucher);
+  });
+}
+
+function openSurvey() {
+  window.open('https://www.mcdfoodforthoughts.com', '_blank');
+}
+
+function restart() {
+  Object.keys(state).forEach(k => { state[k] = Array.isArray(state[k]) ? [] : ''; });
+  document.getElementById('voucher').value = '';
+  document.getElementById('comments').value = '';
+  document.querySelectorAll('.opt-btn,.check-btn,.rating-btn').forEach(b => b.classList.remove('selected'));
+  buildRatings();
+  showStep(0);
+}
+
+document.getElementById('voucher').addEventListener('input', function() {
+  this.value = this.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 12);
+});
+</script>
